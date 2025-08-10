@@ -7,16 +7,22 @@
 
     <script>
       // Any label you like
-      window.__app_id = "qasr-demo";
+      <script>
+  // A simple label for your app (can be any short name)
+  window.__app_id = "hotel-connect-ee1d7";
 
-      // Replace with your Firebase Web config in Step 2
-      window.__firebase_config = JSON.stringify({
-        apiKey: "YOUR_API_KEY",
-        authDomain: "YOUR_PROJECT.firebaseapp.com",
-        projectId: "YOUR_PROJECT_ID",
-        storageBucket: "YOUR_PROJECT.appspot.com",
-        messagingSenderId: "###########",
-        appId: "1:###########:web:###############"
+  // Your Firebase Web config (must stay a valid JSON object)
+  window.__firebase_config = JSON.stringify({
+    apiKey: "AIzaSyC0NL4CJX_6PDerDi9FVjhkEp4VtwDY0c4",
+    authDomain: "hotel-connect-ee1d7.firebaseapp.com",
+    projectId: "hotel-connect-ee1d7",
+    storageBucket: "hotel-connect-ee1d7.firebasestorage.app",
+    messagingSenderId: "117895074926",
+    appId: "1:117895074926:web:2c93e6e8d627a58709427f",
+    measurementId: "G-YXFJKWP52J"
+  });
+</script>
+
       });
     </script>
   </head>
