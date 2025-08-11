@@ -17,26 +17,15 @@ import {
   writeBatch,
 } from "firebase/firestore";
 
-/**
- * HotelConnect: Two-way guest/staff chat with per-user language, translation, history,
- * staff room-following, and a master feed.
- *
- * Notes on translation accuracy:
- *  - This client calls a backend endpoint `/api/translate` to avoid exposing API keys.
- *  - Make the server use a high-quality provider (Google Cloud Translation v3/Advanced or DeepL) and
- *    return `{ translated, provider, confidence, detectedLang }`. This file stores these in message metadata.
- *  - Consider enabling glossary/terminology for brand words and hospitality terms for consistency.
- */
-
-// ---- Languages (label + BCP-47 code)
+/** Languages */
 const LANGUAGES = {
-  English: { label: "English", code: "en-US", voice: "Puck" },
-  Spanish: { label: "Spanish", code: "es-ES", voice: "Leda" },
-  French: { label: "French", code: "fr-FR", voice: "Callirrhoe" },
-  German: { label: "German", code: "de-DE", voice: "Charon" },
-  Japanese: { label: "Japanese", code: "ja-JP", voice: "Kore" },
-  Hindi: { label: "Hindi", code: "hi-IN", voice: "Fenrir" },
-  "Mandarin Chinese": { label: "Mandarin Chinese", code: "zh-CN", voice: "Zephyr" },
+  English: { label: "English", code: "en-US" },
+  Spanish: { label: "Spanish", code: "es-ES" },
+  French: { label: "French", code: "fr-FR" },
+  German: { label: "German", code: "de-DE" },
+  Japanese: { label: "Japanese", code: "ja-JP" },
+  Hindi: { label: "Hindi", code: "hi-IN" },
+  "Mandarin Chinese": { label: "Mandarin Chinese", code: "zh-CN" },
 };
 const HOTEL_LANGUAGE = { label: "English", code: "en-US" };
 
@@ -58,7 +47,7 @@ export default function App() {
   const [db, setDb] = useState(null);
   const [auth, setAuth] = useState(null);
   const [user, setUser] = useState(null);
-  const [userDoc, setUserDoc] = useState(null); // Firestore user profile
+  const [userDoc, setUserDoc] = useState(null);
   const [role, setRole] = useState(null); // 'guest' | 'staff'
   const [isReady, setIsReady] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -67,6 +56,7 @@ export default function App() {
 
   const appId = useMemo(() => (typeof __app_id !== "undefined" ? __app_id : "default-app-id"), []);
 
+  // Firebase init + auth
   useEffect(() => {
     try {
       const firebaseConfig = JSON.parse(typeof __firebase_config !== "undefined" ? __firebase_config : "{}");
@@ -107,21 +97,40 @@ export default function App() {
     }
   }, [appId]);
 
-  const handleRegister = async ({ name, languageKey }) => {
+  /** Registration now accepts roomNumber; if provided, guest is checked in immediately */
+  const handleRegister = async ({ name, languageKey, roomNumber }) => {
     if (!db || !user) return;
     setLoading(true);
     try {
       const lang = LANGUAGES[languageKey] || HOTEL_LANGUAGE;
+      const checkInNow = !!roomNumber && String(roomNumber).trim().length > 0;
       const profile = {
         name,
         language: { label: lang.label, code: lang.code },
         role: "guest",
-        roomId: null,
-        isCheckedIn: false,
+        roomId: checkInNow ? String(roomNumber).trim() : null,
+        isCheckedIn: checkInNow,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
+
       await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}`), profile);
+
+      if (checkInNow) {
+        const rid = String(roomNumber).trim();
+        await setDoc(
+          doc(db, `artifacts/${appId}/public/data/rooms/${rid}`),
+          {
+            guestName: name,
+            guestLanguage: { label: lang.label, code: lang.code },
+            status: "occupied",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
       setUserDoc(profile);
     } catch (e) {
       console.error(e);
@@ -131,6 +140,7 @@ export default function App() {
     }
   };
 
+  /** Keep “simulate scan” option for demos (generates a random room) */
   const handleGuestCheckIn = async () => {
     if (!db || !user || !userDoc) return;
     setLoading(true);
@@ -138,7 +148,7 @@ export default function App() {
       const roomId = uuid();
       await setDoc(doc(db, `artifacts/${appId}/public/data/rooms/${roomId}`), {
         guestName: userDoc.name,
-        guestLanguage: userDoc.language, // {label, code}
+        guestLanguage: userDoc.language,
         status: "occupied",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -153,11 +163,11 @@ export default function App() {
     }
   };
 
+  /** Archive on checkout (unchanged) */
   const handleGuestCheckOut = async (roomId) => {
     if (!db || !user || !roomId) return;
     setLoading(true);
     try {
-      // Archive messages in chunks to avoid 500-op batch limit
       const msgsQ = query(collection(db, `artifacts/${appId}/public/data/messages`), where("roomId", "==", roomId));
       const snap = await getDocs(msgsQ);
       const docs = snap.docs;
@@ -229,7 +239,7 @@ export default function App() {
   );
 }
 
-// ---- Shell & common UI
+/* Shell UI */
 const PageShell = ({ children }) => (
   <div className="bg-gray-100 min-h-screen w-full flex items-center justify-center p-4">
     <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col" style={{ height: "90vh" }}>
@@ -271,13 +281,15 @@ const RoleSelect = ({ onChoose }) => (
   </div>
 );
 
+/** Registration: name + language + ROOM NUMBER (optional to auto check-in) */
 const Registration = ({ onSubmit }) => {
   const [name, setName] = useState("");
   const [lang, setLang] = useState("English");
+  const [room, setRoom] = useState("");
   const submit = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    onSubmit({ name: name.trim(), languageKey: lang });
+    onSubmit({ name: name.trim(), languageKey: lang, roomNumber: room.trim() });
   };
   return (
     <div className="p-6">
@@ -287,6 +299,8 @@ const Registration = ({ onSubmit }) => {
         <select className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600" value={lang} onChange={(e) => setLang(e.target.value)}>
           {Object.keys(LANGUAGES).map((k) => (<option key={k} value={k}>{LANGUAGES[k].label}</option>))}
         </select>
+        <input className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-600" placeholder="Room number (optional)" value={room} onChange={(e) => setRoom(e.target.value)} />
+        <p className="text-xs text-gray-500">Tip: Fill the room number to skip the QR step and start chatting immediately.</p>
         <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2 hover:bg-blue-700">Continue</button>
       </form>
     </div>
@@ -304,11 +318,11 @@ const QRCodeScreen = ({ userName, onSimulateScan }) => (
   </div>
 );
 
-// ---- Staff dashboard with Follow + Master Feed
+/* Staff dashboard */
 function StaffDashboard({ db, appId, staff }) {
   const [rooms, setRooms] = useState([]);
   const [selected, setSelected] = useState(null);
-  const [staffProfile, setStaffProfile] = useState(null); // { followedRooms: [] }
+  const [staffProfile, setStaffProfile] = useState(null);
   const [view, setView] = useState("my"); // 'my' | 'all' | 'feed'
 
   // Ensure staff profile exists & subscribe
@@ -400,10 +414,10 @@ function StaffDashboard({ db, appId, staff }) {
   );
 }
 
-// ---- Aggregated feed across selected rooms ("followed" by default) with an option to view ALL.
+/* Master Feed: avoid Firestore composite index by sorting locally */
 function MasterFeed({ db, appId, title, roomIds, showAllOption = false, allRooms = [], onOpenRoom }) {
   const [useAll, setUseAll] = useState(false);
-  const [items, setItems] = useState([]); // { roomId, room, message }
+  const [items, setItems] = useState([]);
 
   useEffect(() => {
     if (!db) return;
@@ -414,18 +428,19 @@ function MasterFeed({ db, appId, title, roomIds, showAllOption = false, allRooms
     const attach = (rid) => {
       const qMsgs = query(
         collection(db, `artifacts/${appId}/public/data/messages`),
-        where('roomId', '==', rid),
-        orderBy('timestamp', 'desc')
+        where('roomId', '==', rid)
       );
       const unsub = onSnapshot(qMsgs, (snap) => {
-        const rows = snap.docs.slice(0, 20).map((d) => ({ id: d.id, ...d.data() }));
+        const rowsAll = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        rowsAll.sort((a,b) => (b.timestamp?.toMillis?.()||0) - (a.timestamp?.toMillis?.()||0));
+        const rows = rowsAll.slice(0, 20);
         results.set(rid, rows);
         const merged = Array.from(results.entries()).flatMap(([roomId, msgs]) =>
           msgs.map((m) => ({ roomId, room: allRooms.find((r) => r.id === roomId), message: m }))
         );
         merged.sort((a, b) => (b.message.timestamp?.toMillis?.() || 0) - (a.message.timestamp?.toMillis?.() || 0));
         setItems(merged.slice(0, 100));
-      });
+      }, (err) => console.error('Feed subscription error:', err));
       unsubs.push(unsub);
     };
 
@@ -451,7 +466,7 @@ function MasterFeed({ db, appId, title, roomIds, showAllOption = false, allRooms
           <div key={message.id} className="p-3 bg-white rounded-lg border flex items-start justify-between gap-3">
             <div className="text-sm">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">Room {roomId.slice(0,6)}</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">Room {roomId}</span>
                 <span className="text-[10px] text-gray-500">{message.timestamp?.toDate ? message.timestamp.toDate().toLocaleString() : '…'}</span>
               </div>
               <div className="text-xs text-gray-600 mb-1">{message.senderName} • {message.senderRole}</div>
@@ -465,29 +480,31 @@ function MasterFeed({ db, appId, title, roomIds, showAllOption = false, allRooms
   );
 }
 
-// ---- Chat
+/* Chat */
 function Chat({ db, appId, role, roomId, currentUser, guestLanguage, onGuestCheckout, onBack }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const endRef = useRef(null);
 
-  const currentLanguage = role === "guest" ? currentUser.language : HOTEL_LANGUAGE; // {label, code}
+  const currentLanguage = role === "guest" ? currentUser.language : HOTEL_LANGUAGE;
   const otherLanguage = role === "guest" ? HOTEL_LANGUAGE : (guestLanguage || { code: "en-US", label: "English" });
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   useEffect(() => {
     if (!db || !roomId) return;
-    const qMsgs = query(collection(db, `artifacts/${appId}/public/data/messages`), where("roomId", "==", roomId), orderBy("timestamp", "asc"));
+    // No orderBy: we sort locally to avoid Firestore composite index requirement
+    const qMsgs = query(collection(db, `artifacts/${appId}/public/data/messages`), where("roomId", "==", roomId));
     const unsub = onSnapshot(qMsgs, (snap) => {
       const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      rows.sort((a,b) => (a.timestamp?.toMillis?.()||0) - (b.timestamp?.toMillis?.()||0));
       const processed = rows.map((m) => {
         const showTranslated = m.language?.code !== currentLanguage.code && m.translations?.[currentLanguage.code];
         return showTranslated ? { ...m, text: m.translations[currentLanguage.code] } : m;
       });
       setMessages(processed);
-    });
+    }, (err) => console.error('Message subscription error:', err));
     return () => unsub();
   }, [db, appId, roomId, currentLanguage.code]);
 
@@ -501,13 +518,13 @@ function Chat({ db, appId, role, roomId, currentUser, guestLanguage, onGuestChec
     const payload = {
       roomId,
       text: body,
-      language: currentLanguage, // {label, code}
+      language: currentLanguage,
       senderId: currentUser.id,
       senderName: currentUser.name,
-      senderRole: role, // 'guest' | 'staff'
+      senderRole: role,
       timestamp: serverTimestamp(),
       translations: {},
-      translationMeta: {}, // { [lang]: { provider, confidence, detectedLang } }
+      translationMeta: {},
     };
 
     try {
@@ -531,6 +548,12 @@ function Chat({ db, appId, role, roomId, currentUser, guestLanguage, onGuestChec
 
     try {
       await addDoc(collection(db, `artifacts/${appId}/public/data/messages`), payload);
+      // Touch room so staff lists sort by activity and master feed stays fresh
+      await setDoc(
+        doc(db, `artifacts/${appId}/public/data/rooms/${roomId}`),
+        { updatedAt: serverTimestamp(), lastMessageAt: serverTimestamp(), lastMessagePreview: body.slice(0,120) },
+        { merge: true }
+      );
     } catch (e) {
       console.error(e);
       alert("Failed to send message.");
