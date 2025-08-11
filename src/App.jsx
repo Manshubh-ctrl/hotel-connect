@@ -17,7 +17,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 
-/** Languages */
+/** Language options */
 const LANGUAGES = {
   English: { label: "English", code: "en-US" },
   Spanish: { label: "Spanish", code: "es-ES" },
@@ -28,18 +28,44 @@ const LANGUAGES = {
   "Mandarin Chinese": { label: "Mandarin Chinese", code: "zh-CN" },
 };
 const HOTEL_LANGUAGE = { label: "English", code: "en-US" };
+// Room numbers 100 - 200 for dropdown registration
+const ROOM_NUMBERS = Array.from({ length: 101 }, (_, i) => String(100 + i));
 
 const uuid = () =>
-  (typeof crypto !== "undefined" && crypto.randomUUID)
+  typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : `room-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 
-const Toast = ({ message, onClose }) => (
-  <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
-    <div className="flex items-center gap-3">
-      <span>{message}</span>
-      <button className="opacity-70 hover:opacity-100" onClick={onClose}>✕</button>
+const PageShell = ({ children }) => (
+  <div className="bg-gray-100 min-h-screen w-full flex items-center justify-center p-4">
+    <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col" style={{ height: "90vh" }}>
+      {children}
     </div>
+  </div>
+);
+
+const Header = ({ showHome, onHome }) => (
+  <div className="bg-blue-600 text-white p-4 text-center relative">
+    {showHome && (
+      <button onClick={onHome} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/90 hover:text-white" aria-label="Home">
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      </button>
+    )}
+    <h1 className="text-2xl font-bold">HotelConnect</h1>
+    <p className="text-xs opacity-90">Multilingual Guest Messaging</p>
+  </div>
+);
+
+const Loader = () => (
+  <div className="flex flex-1 items-center justify-center p-12">
+    <div className="w-16 h-16 border-4 border-blue-600 border-dashed rounded-full animate-spin" />
+  </div>
+);
+
+const ErrorPanel = ({ message, onHome }) => (
+  <div className="flex-1 p-6 flex flex-col items-center justify-center gap-4 text-center">
+    <p className="text-red-600 font-semibold">{message}</p>
+    <button onClick={onHome} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Back</button>
   </div>
 );
 
@@ -48,15 +74,15 @@ export default function App() {
   const [auth, setAuth] = useState(null);
   const [user, setUser] = useState(null);
   const [userDoc, setUserDoc] = useState(null);
-  const [role, setRole] = useState(null); // 'guest' | 'staff'
-  const [isReady, setIsReady] = useState(false);
+  const [role, setRole] = useState(null);
+  const [staffProfile, setStaffProfile] = useState(null); // 'guest' | 'staff'
   const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
-  const [toast, setToast] = useState("");
 
   const appId = useMemo(() => (typeof __app_id !== "undefined" ? __app_id : "default-app-id"), []);
 
-  // Firebase init + auth
+  // Firebase init & auth
   useEffect(() => {
     try {
       const firebaseConfig = JSON.parse(typeof __firebase_config !== "undefined" ? __firebase_config : "{}");
@@ -85,7 +111,7 @@ export default function App() {
           console.error(e);
           setError("Authentication failed.");
         } finally {
-          setIsReady(true);
+          setReady(true);
           setLoading(false);
         }
       });
@@ -97,7 +123,14 @@ export default function App() {
     }
   }, [appId]);
 
-  /** Registration now accepts roomNumber; if provided, guest is checked in immediately */
+  // Subscribe to staff profile when signed in (used for staff language & name)
+  useEffect(() => {
+    if (!db || !user) return;
+    const ref = doc(db, `artifacts/${appId}/staff/${user.uid}`);
+    const unsub = onSnapshot(ref, (snap) => setStaffProfile(snap.data() || null));
+    return () => unsub();
+  }, [db, user, appId]);
+
   const handleRegister = async ({ name, languageKey, roomNumber }) => {
     if (!db || !user) return;
     setLoading(true);
@@ -113,7 +146,6 @@ export default function App() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
-
       await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}`), profile);
 
       if (checkInNow) {
@@ -140,7 +172,6 @@ export default function App() {
     }
   };
 
-  /** Keep “simulate scan” option for demos (generates a random room) */
   const handleGuestCheckIn = async () => {
     if (!db || !user || !userDoc) return;
     setLoading(true);
@@ -163,7 +194,6 @@ export default function App() {
     }
   };
 
-  /** Archive on checkout (unchanged) */
   const handleGuestCheckOut = async (roomId) => {
     if (!db || !user || !roomId) return;
     setLoading(true);
@@ -171,14 +201,12 @@ export default function App() {
       const msgsQ = query(collection(db, `artifacts/${appId}/public/data/messages`), where("roomId", "==", roomId));
       const snap = await getDocs(msgsQ);
       const docs = snap.docs;
-      const chunkSize = 400;
-      for (let i = 0; i < docs.length; i += chunkSize) {
+      const chunk = 400;
+      for (let i = 0; i < docs.length; i += chunk) {
         const batch = writeBatch(db);
-        const slice = docs.slice(i, i + chunkSize);
-        for (const d of slice) {
-          const data = d.data();
+        for (const d of docs.slice(i, i + chunk)) {
           batch.set(doc(db, `artifacts/${appId}/public/data/archived_messages/${d.id}`), {
-            ...data,
+            ...d.data(),
             archivedAt: serverTimestamp(),
             originalMessageId: d.id,
           });
@@ -189,7 +217,6 @@ export default function App() {
       await setDoc(doc(db, `artifacts/${appId}/public/data/rooms/${roomId}`), { status: "checked_out", updatedAt: serverTimestamp() }, { merge: true });
       await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}`), { roomId: null, isCheckedIn: false, updatedAt: serverTimestamp() }, { merge: true });
       setUserDoc((p) => ({ ...p, roomId: null, isCheckedIn: false }));
-      setToast("Checkout complete. Chat history archived.");
     } catch (e) {
       console.error(e);
       setError("Checkout failed.");
@@ -198,80 +225,60 @@ export default function App() {
     }
   };
 
-  const resetToRoleSelect = () => setRole(null);
+  const reset = () => setRole(null);
 
-  if (!isReady || loading) return <PageShell><Loader /></PageShell>;
-  if (error) return <PageShell><ErrorPanel message={error} onHome={resetToRoleSelect} /></PageShell>;
+  if (!ready || loading) return <PageShell><Loader/></PageShell>;
+  if (error) return <PageShell><ErrorPanel message={error} onHome={reset} /></PageShell>;
 
   return (
     <PageShell>
-      <Header showHome={!!role} onHome={resetToRoleSelect} />
+      <Header showHome={!!role} onHome={reset} />
 
-      {!role && <RoleSelect onChoose={(r) => setRole(r)} />}
+      {!role && <RoleSelect onChoose={setRole} />}
 
-      {role === "guest" && (
-        !userDoc?.name ? (
-          <Registration onSubmit={handleRegister} />
-        ) : !userDoc?.isCheckedIn ? (
-          <QRCodeScreen userName={userDoc.name} onSimulateScan={handleGuestCheckIn} />
+      {role === "guest" && (!userDoc?.name ? (
+        <Registration onSubmit={handleRegister} />
+      ) : !userDoc?.isCheckedIn ? (
+        <QRCodeScreen userName={userDoc.name} onSimulateScan={handleGuestCheckIn} />
+      ) : (
+        <Chat
+          db={db}
+          appId={appId}
+          role="guest"
+          roomId={userDoc.roomId}
+          currentUser={{ id: user.uid, name: userDoc.name, language: userDoc.language }}
+          onGuestCheckout={() => handleGuestCheckOut(userDoc.roomId)}
+        />
+      ))}
+
+      {role === "staff" && (
+        !staffProfile?.name ? (
+          <StaffRegistration onSubmit={async ({ name, languageKey }) => {
+            if (!db || !user) return;
+            const lang = LANGUAGES[languageKey] || HOTEL_LANGUAGE;
+            await setDoc(
+              doc(db, `artifacts/${appId}/staff/${user.uid}`),
+              {
+                name,
+                language: { label: lang.label, code: lang.code },
+                followedRooms: [],
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          }} />
         ) : (
-          <Chat
+          <StaffDashboard
             db={db}
             appId={appId}
-            role="guest"
-            roomId={userDoc.roomId}
-            currentUser={{ id: user.uid, name: userDoc.name, language: userDoc.language }}
-            onGuestCheckout={() => handleGuestCheckOut(userDoc.roomId)}
+            staff={{ id: user?.uid, name: staffProfile.name, language: staffProfile.language }}
           />
         )
       )}
-
-      {role === "staff" && (
-        <StaffDashboard
-          db={db}
-          appId={appId}
-          staff={{ id: user?.uid, name: "Staff", language: HOTEL_LANGUAGE }}
-        />
-      )}
-
-      {!!toast && <Toast message={toast} onClose={() => setToast("")} />}
     </PageShell>
   );
 }
-
-/* Shell UI */
-const PageShell = ({ children }) => (
-  <div className="bg-gray-100 min-h-screen w-full flex items-center justify-center p-4">
-    <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col" style={{ height: "90vh" }}>
-      {children}
-    </div>
-  </div>
-);
-
-const Header = ({ showHome, onHome }) => (
-  <div className="bg-blue-600 text-white p-4 text-center relative">
-    {showHome && (
-      <button onClick={onHome} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/90 hover:text-white" aria-label="Home">
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
-      </button>
-    )}
-    <h1 className="text-2xl font-bold">HotelConnect</h1>
-    <p className="text-xs opacity-90">Multilingual Guest Messaging</p>
-  </div>
-);
-
-const Loader = () => (
-  <div className="flex flex-1 items-center justify-center p-12">
-    <div className="w-16 h-16 border-4 border-blue-600 border-dashed rounded-full animate-spin" />
-  </div>
-);
-
-const ErrorPanel = ({ message, onHome }) => (
-  <div className="flex-1 p-6 flex flex-col items-center justify-center gap-4 text-center">
-    <p className="text-red-600 font-semibold">{message}</p>
-    <button onClick={onHome} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Back</button>
-  </div>
-);
 
 const RoleSelect = ({ onChoose }) => (
   <div className="flex-1 p-8 flex flex-col items-center justify-center gap-4">
@@ -281,7 +288,6 @@ const RoleSelect = ({ onChoose }) => (
   </div>
 );
 
-/** Registration: name + language + ROOM NUMBER (optional to auto check-in) */
 const Registration = ({ onSubmit }) => {
   const [name, setName] = useState("");
   const [lang, setLang] = useState("English");
@@ -289,18 +295,21 @@ const Registration = ({ onSubmit }) => {
   const submit = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    onSubmit({ name: name.trim(), languageKey: lang, roomNumber: room.trim() });
+    onSubmit({ name: name.trim(), languageKey: lang, roomNumber: room });
   };
   return (
     <div className="p-6">
-      <h2 className="text-lg font-semibold text-gray-800 mb-4">Register</h2>
+      <h2 className="text-lg font-semibold text-gray-800 mb-4">Guest Registration</h2>
       <form onSubmit={submit} className="space-y-4">
         <input className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-600" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
         <select className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600" value={lang} onChange={(e) => setLang(e.target.value)}>
           {Object.keys(LANGUAGES).map((k) => (<option key={k} value={k}>{LANGUAGES[k].label}</option>))}
         </select>
-        <input className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-600" placeholder="Room number (optional)" value={room} onChange={(e) => setRoom(e.target.value)} />
-        <p className="text-xs text-gray-500">Tip: Fill the room number to skip the QR step and start chatting immediately.</p>
+        <select className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600" value={room} onChange={(e) => setRoom(e.target.value)}>
+          <option value="">Choose room (optional)</option>
+          {ROOM_NUMBERS.map((n) => (<option key={n} value={n}>{n}</option>))}
+        </select>
+        <p className="text-xs text-gray-500">Tip: Selecting a room checks you in immediately and opens chat (no QR needed).</p>
         <button type="submit" className="w-full bg-blue-600 text-white rounded-lg py-2 hover:bg-blue-700">Continue</button>
       </form>
     </div>
@@ -318,7 +327,29 @@ const QRCodeScreen = ({ userName, onSimulateScan }) => (
   </div>
 );
 
-/* Staff dashboard */
+// Staff registration (name + preferred language)
+const StaffRegistration = ({ onSubmit }) => {
+  const [name, setName] = useState("");
+  const [lang, setLang] = useState("English");
+  const submit = (e) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onSubmit({ name: name.trim(), languageKey: lang });
+  };
+  return (
+    <div className="p-6">
+      <h2 className="text-lg font-semibold text-gray-800 mb-4">Staff Registration</h2>
+      <form onSubmit={submit} className="space-y-4">
+        <input className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-600" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        <select className="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-600" value={lang} onChange={(e) => setLang(e.target.value)}>
+          {Object.keys(LANGUAGES).map((k) => (<option key={k} value={k}>{LANGUAGES[k].label}</option>))}
+        </select>
+        <button type="submit" className="w-full bg-indigo-600 text-white rounded-lg py-2 hover:bg-indigo-700">Save & Continue</button>
+      </form>
+    </div>
+  );
+};
+
 function StaffDashboard({ db, appId, staff }) {
   const [rooms, setRooms] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -381,113 +412,39 @@ function StaffDashboard({ db, appId, staff }) {
       <div className="p-3 border-b flex items-center gap-2 bg-white">
         <button className={`px-3 py-1 rounded ${view === 'my' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`} onClick={() => setView('my')}>My Rooms</button>
         <button className={`px-3 py-1 rounded ${view === 'all' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`} onClick={() => setView('all')}>All Rooms</button>
-        <button className={`px-3 py-1 rounded ${view === 'feed' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`} onClick={() => setView('feed')}>Master Feed</button>
       </div>
 
-      {view !== 'feed' && (
-        <div className="p-4 flex-1 overflow-y-auto">
-          <h2 className="text-lg font-semibold mb-3">{view === 'my' ? 'Rooms I Follow' : 'All Rooms'}</h2>
-          {(view === 'my' ? myRooms : rooms).length === 0 && (
-            <p className="text-gray-500">{view === 'my' ? 'You are not following any rooms yet.' : 'No rooms yet.'}</p>
-          )}
-          <div className="space-y-2">
-            {(view === 'my' ? myRooms : rooms).map((r) => (
-              <div key={r.id} className={`w-full p-3 rounded-lg border flex items-center justify-between ${r.status === 'occupied' ? 'border-blue-200' : 'border-gray-200'}`}>
-                <div onClick={() => setSelected(r)} className="cursor-pointer">
-                  <p className="font-medium text-gray-800">Room: {r.id}</p>
-                  <p className="text-xs text-gray-600">Guest: {r.guestName} • Preferred: {r.guestLanguage?.label || r.guestLanguage?.code}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-1 rounded-full ${r.status === 'occupied' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status === 'occupied' ? 'In House' : 'Checked Out'}</span>
-                  <button onClick={() => toggleFollow(r.id)} className={`text-xs px-2 py-1 rounded border ${followed.has(r.id) ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>{followed.has(r.id) ? 'Unfollow' : 'Follow'}</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {view === 'feed' && (
-        <MasterFeed db={db} appId={appId} title="Master Feed" roomIds={Array.from(followed)} showAllOption allRooms={rooms} onOpenRoom={(room) => setSelected(room)} />
-      )}
-    </div>
-  );
-}
-
-/* Master Feed: avoid Firestore composite index by sorting locally */
-function MasterFeed({ db, appId, title, roomIds, showAllOption = false, allRooms = [], onOpenRoom }) {
-  const [useAll, setUseAll] = useState(false);
-  const [items, setItems] = useState([]);
-
-  useEffect(() => {
-    if (!db) return;
-    const targetRooms = (useAll ? allRooms.map((r) => r.id) : roomIds) || [];
-    const unsubs = [];
-    const results = new Map();
-
-    const attach = (rid) => {
-      const qMsgs = query(
-        collection(db, `artifacts/${appId}/public/data/messages`),
-        where('roomId', '==', rid)
-      );
-      const unsub = onSnapshot(qMsgs, (snap) => {
-        const rowsAll = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        rowsAll.sort((a,b) => (b.timestamp?.toMillis?.()||0) - (a.timestamp?.toMillis?.()||0));
-        const rows = rowsAll.slice(0, 20);
-        results.set(rid, rows);
-        const merged = Array.from(results.entries()).flatMap(([roomId, msgs]) =>
-          msgs.map((m) => ({ roomId, room: allRooms.find((r) => r.id === roomId), message: m }))
-        );
-        merged.sort((a, b) => (b.message.timestamp?.toMillis?.() || 0) - (a.message.timestamp?.toMillis?.() || 0));
-        setItems(merged.slice(0, 100));
-      }, (err) => console.error('Feed subscription error:', err));
-      unsubs.push(unsub);
-    };
-
-    targetRooms.forEach(attach);
-    return () => unsubs.forEach((u) => u());
-  }, [db, appId, roomIds ? roomIds.join('|') : '', useAll, allRooms.map(r=>r.id).join('|')]);
-
-  return (
-    <div className="flex-1 flex flex-col">
-      <div className="p-3 border-b bg-white flex items-center justify-between">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        {showAllOption && (
-          <label className="text-sm flex items-center gap-2">
-            <input type="checkbox" checked={useAll} onChange={(e) => setUseAll(e.target.checked)} />
-            Show all rooms
-          </label>
+      <div className="p-4 flex-1 overflow-y-auto">
+        <h2 className="text-lg font-semibold mb-3">{view === 'my' ? 'Rooms I Follow' : 'All Rooms'}</h2>
+        {(view === 'my' ? myRooms : rooms).length === 0 && (
+          <p className="text-gray-500">{view === 'my' ? 'You are not following any rooms yet.' : 'No rooms yet.'}</p>
         )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50">
-        {items.length === 0 && <p className="text-gray-500">No messages yet.</p>}
-        {items.map(({ roomId, room, message }) => (
-          <div key={message.id} className="p-3 bg-white rounded-lg border flex items-start justify-between gap-3">
-            <div className="text-sm">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">Room {roomId}</span>
-                <span className="text-[10px] text-gray-500">{message.timestamp?.toDate ? message.timestamp.toDate().toLocaleString() : '…'}</span>
+        <div className="space-y-2">
+          {(view === 'my' ? myRooms : rooms).map((r) => (
+            <div key={r.id} className={`w-full p-3 rounded-lg border flex items-center justify-between ${r.status === 'occupied' ? 'border-blue-200' : 'border-gray-200'}`}>
+              <div onClick={() => setSelected(r)} className="cursor-pointer">
+                <p className="font-medium text-gray-800">Room: {r.id}</p>
+                <p className="text-xs text-gray-600">Guest: {r.guestName} • Preferred: {r.guestLanguage?.label || r.guestLanguage?.code}</p>
               </div>
-              <div className="text-xs text-gray-600 mb-1">{message.senderName} • {message.senderRole}</div>
-              <div className="text-gray-800 whitespace-pre-wrap break-words">{message.text}</div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs px-2 py-1 rounded-full ${r.status === 'occupied' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status === 'occupied' ? 'In House' : 'Checked Out'}</span>
+                <button onClick={() => toggleFollow(r.id)} className={`text-xs px-2 py-1 rounded border ${followed.has(r.id) ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>{followed.has(r.id) ? 'Unfollow' : 'Follow'}</button>
+              </div>
             </div>
-            <button className="text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 self-start" onClick={() => onOpenRoom(room || { id: roomId, guestLanguage: { code: 'en-US', label: 'English' } })}>Open</button>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-/* Chat */
 function Chat({ db, appId, role, roomId, currentUser, guestLanguage, onGuestCheckout, onBack }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const endRef = useRef(null);
 
-  const currentLanguage = role === "guest" ? currentUser.language : HOTEL_LANGUAGE;
+  const currentLanguage = currentUser.language || HOTEL_LANGUAGE;
   const otherLanguage = role === "guest" ? HOTEL_LANGUAGE : (guestLanguage || { code: "en-US", label: "English" });
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -548,7 +505,7 @@ function Chat({ db, appId, role, roomId, currentUser, guestLanguage, onGuestChec
 
     try {
       await addDoc(collection(db, `artifacts/${appId}/public/data/messages`), payload);
-      // Touch room so staff lists sort by activity and master feed stays fresh
+      // Touch room so staff lists sort by activity
       await setDoc(
         doc(db, `artifacts/${appId}/public/data/rooms/${roomId}`),
         { updatedAt: serverTimestamp(), lastMessageAt: serverTimestamp(), lastMessagePreview: body.slice(0,120) },
@@ -580,7 +537,7 @@ function Chat({ db, appId, role, roomId, currentUser, guestLanguage, onGuestChec
 
       <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-gray-50">
         {messages.map((m) => (<Bubble key={m.id} mine={m.senderId === currentUser.id} message={m} />))}
-        <div ref={endRef} />
+        <div />
       </div>
 
       <form onSubmit={send} className="p-3 border-t bg-white flex items-center gap-2">
