@@ -354,7 +354,7 @@ function StaffDashboard({ db, appId, staff }) {
   const [rooms, setRooms] = useState([]);
   const [selected, setSelected] = useState(null);
   const [staffProfile, setStaffProfile] = useState(null);
-  const [view, setView] = useState("my"); // 'my' | 'all' | 'feed'
+  const [view, setView] = useState("all"); // 'my' | 'all' | 'feed' (default to 'all' so it's obvious)
 
   // Ensure staff profile exists & subscribe
   useEffect(() => {
@@ -417,18 +417,31 @@ function StaffDashboard({ db, appId, staff }) {
       <div className="p-4 flex-1 overflow-y-auto">
         <h2 className="text-lg font-semibold mb-3">{view === 'my' ? 'Rooms I Follow' : 'All Rooms'}</h2>
         {(view === 'my' ? myRooms : rooms).length === 0 && (
-          <p className="text-gray-500">{view === 'my' ? 'You are not following any rooms yet.' : 'No rooms yet.'}</p>
+          <div className="text-gray-600 text-sm bg-gray-50 border border-dashed rounded-lg p-4">
+            {view === 'my' ? (
+              <>
+                <p>You are not following any rooms yet.</p>
+                <p className="mt-1">Go to <strong>All Rooms</strong>, click a room, and press <strong>Follow</strong> to add it here.</p>
+              </>
+            ) : (
+              <>
+                <p>No rooms yet.</p>
+                <p className="mt-1">Ask a guest to register and choose a room number, or use <strong>Simulate Scan</strong> on the guest device.</p>
+              </>
+            )}
+          </div>
         )}
         <div className="space-y-2">
           {(view === 'my' ? myRooms : rooms).map((r) => (
             <div key={r.id} className={`w-full p-3 rounded-lg border flex items-center justify-between ${r.status === 'occupied' ? 'border-blue-200' : 'border-gray-200'}`}>
-              <div onClick={() => setSelected(r)} className="cursor-pointer">
+              <div className="cursor-pointer" onClick={() => setSelected(r)}>
                 <p className="font-medium text-gray-800">Room: {r.id}</p>
                 <p className="text-xs text-gray-600">Guest: {r.guestName} • Preferred: {r.guestLanguage?.label || r.guestLanguage?.code}</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className={`text-xs px-2 py-1 rounded-full ${r.status === 'occupied' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status === 'occupied' ? 'In House' : 'Checked Out'}</span>
                 <button onClick={() => toggleFollow(r.id)} className={`text-xs px-2 py-1 rounded border ${followed.has(r.id) ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>{followed.has(r.id) ? 'Unfollow' : 'Follow'}</button>
+                <button onClick={() => setSelected(r)} className="text-xs px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700">Open</button>
               </div>
             </div>
           ))}
